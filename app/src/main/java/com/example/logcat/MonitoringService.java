@@ -21,7 +21,9 @@ import android.widget.Toast;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -49,6 +51,8 @@ public class MonitoringService extends Service {
 
         // Monitor anti-forensic actions
         monitorAntiForensicActions();
+        monitorShutdownAndReboot();
+        monitoringLogcatClear();
     }
 
     private void initializeLogFile() {
@@ -132,6 +136,7 @@ public class MonitoringService extends Service {
         }
     }
 
+    /* Timestamp Change 감지 */
     private void monitorAntiForensicActions() {
         timeChangeReceiver = new BroadcastReceiver() {
             @Override
@@ -171,6 +176,28 @@ public class MonitoringService extends Service {
         schedulePeriodicTimeCheck();
     }
 
+    /* 전원 꺼짐 및 재부팅 감지 */
+    private void monitorShutdownAndReboot() {
+        BroadcastReceiver shutdownReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                String action = intent.getAction();
+                String logMessage = "";
+
+                if (Intent.ACTION_SHUTDOWN.equals(action)) {
+                    logMessage = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date()) +
+                            " Device shutdown detected\n";
+                }
+
+                appendToLogFile(logMessage);
+            }
+        };
+
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_SHUTDOWN);
+        registerReceiver(shutdownReceiver, filter);
+    }
+
     private void schedulePeriodicTimeCheck() {
         handler.postDelayed(new Runnable() {
             @Override
@@ -180,6 +207,39 @@ public class MonitoringService extends Service {
                 handler.postDelayed(this, 1000); // Re-run every second
             }
         }, 1000);
+    }
+
+    /* logcat -c 탐지 */
+    private void monitoringLogcatClear() {
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                boolean isLogcatCleared = isLogBufferCleared();
+                if (isLogcatCleared) {
+                   String logMessage =  new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date())
+                           + " Logcat buffer cleared (logcat -c detected).\n";
+                   appendToLogFile(logMessage);
+                }
+                handler.postDelayed(this, 5000); // 5초 마다 확인
+            }
+        }, 5000);
+    }
+
+    private boolean isLogBufferCleared() {
+        try {
+            Process process = Runtime.getRuntime().exec("logcat -d -t 1"); // logcat을 실행할 수 있는 건가?
+            int exitValue = process.waitFor();
+
+            if (exitValue == 0) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    String line = reader.readLine();
+                    return line == null || line.isEmpty();
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return false;
     }
 
     private Notification getNotification() {

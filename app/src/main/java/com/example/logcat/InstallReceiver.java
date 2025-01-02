@@ -14,13 +14,7 @@ public class InstallReceiver extends BroadcastReceiver{
             Log.d("InstallReceiver", "App installed or updated. Starting MonitoringService.");
 
             Intent serviceIntent = new Intent(context, MonitoringService.class);
-            if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O){
-                context.startForegroundService(serviceIntent);
-            }
-            else{
-                context.startService(serviceIntent);
-            }
+            context.startForegroundService(serviceIntent);
         }
     }
-
 }
