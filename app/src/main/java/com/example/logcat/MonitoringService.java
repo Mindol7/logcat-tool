@@ -6,6 +6,7 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
+import android.database.ContentObserver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
@@ -17,6 +18,7 @@ import android.os.IBinder;
 import android.provider.MediaStore;
 import android.util.Log;
 import android.widget.Toast;
+import android.database.Cursor;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
@@ -34,6 +36,7 @@ public class MonitoringService extends Service {
     private static final String CHANNEL_ID = "MonitoringServiceChannel";
     private Uri logFileUri;
     private BroadcastReceiver timeChangeReceiver;
+    private ContentObserver mediaStoreObserver;
     private final Handler handler = new Handler();
     private long lastCheckedTime = System.currentTimeMillis();
 
@@ -53,7 +56,83 @@ public class MonitoringService extends Service {
         monitorAntiForensicActions();
         monitorShutdownAndReboot();
         monitoringLogcatClear();
+
+        // Monitor MediaStore changes
+        monitorMediaStoreChanges();
     }
+
+    private void monitorMediaStoreChanges() {
+        ContentResolver resolver = getContentResolver();
+        Uri mediaUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+
+        mediaStoreObserver = new ContentObserver(new Handler()) {
+            @Override
+            public void onChange(boolean selfChange, Uri uri) {
+                super.onChange(selfChange, uri);
+
+                if (uri != null) {
+                    String logMessage = getMediaDetails(uri);
+                    appendToLogFile(logMessage);
+                }
+            }
+        };
+        resolver.registerContentObserver(mediaUri, true, mediaStoreObserver);
+        Log.d("MonitoringService", "MediaStore change observer registered");
+    }
+
+
+    private String getMediaDetails(Uri uri) {
+        ContentResolver resolver = getContentResolver();
+        String logMessage = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date())
+                + " MediaStore changed: " + uri + "\n";
+
+        // 명시적으로 필요한 필드 요청
+        String[] projection = {
+                MediaStore.Images.Media.DISPLAY_NAME,
+                MediaStore.Images.Media.RELATIVE_PATH,
+                MediaStore.Images.Media.DATE_TAKEN // 사진이 찍힌 날짜와 시간
+        };
+
+        try (Cursor cursor = resolver.query(uri, projection, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                // DISPLAY_NAME 필드로 파일 이름 확인
+                int displayNameIndex = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME);
+                if (displayNameIndex >= 0) {
+                    String fileName = cursor.getString(displayNameIndex);
+                    logMessage += "File Name (DISPLAY_NAME): " + fileName + "\n";
+                } else {
+                    logMessage += "File Name column not found\n";
+                }
+
+                // RELATIVE_PATH 필드로 파일 경로 확인
+                int relativePathIndex = cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH);
+                if (relativePathIndex >= 0) {
+                    String relativePath = cursor.getString(relativePathIndex);
+                    logMessage += "Relative Path: " + relativePath + "\n";
+                } else {
+                    logMessage += "Relative Path column not found\n";
+                }
+
+                // DATE_TAKEN 필드로 사진이 찍힌 날짜와 시간 확인
+                int dateTakenIndex = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN);
+                if (dateTakenIndex >= 0) {
+                    long dateTaken = cursor.getLong(dateTakenIndex);
+                    logMessage += "Modifed After Date: " + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date(dateTaken)) + "\n";
+                } else {
+                    logMessage += "Date Taken column not found\n";
+                }
+            } else {
+                logMessage += "Cursor is null or no data found for URI\n";
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            logMessage += "Error retrieving media details: " + e.getMessage() + "\n";
+        }
+
+        return logMessage;
+    }
+
+
 
     private void initializeLogFile() {
         ContentResolver resolver = getContentResolver();
